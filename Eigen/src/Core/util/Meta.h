@@ -98,6 +98,8 @@ template<> struct is_arithmetic<signed long>   { enum { value = true }; };
 template<> struct is_arithmetic<unsigned long> { enum { value = true }; };
 
 #if EIGEN_HAS_CXX11
+template<> struct is_arithmetic<signed long long>   { enum { value = true }; };
+template<> struct is_arithmetic<unsigned long long> { enum { value = true }; };
 using std::is_integral;
 #else
 template<typename T> struct is_integral               { enum { value = false }; };
@@ -111,6 +113,10 @@ template<> struct is_integral<signed int>             { enum { value = true }; }
 template<> struct is_integral<unsigned int>           { enum { value = true }; };
 template<> struct is_integral<signed long>            { enum { value = true }; };
 template<> struct is_integral<unsigned long>          { enum { value = true }; };
+#if EIGEN_COMP_MSVC
+template<> struct is_integral<signed __int64>         { enum { value = true }; };
+template<> struct is_integral<unsigned __int64>       { enum { value = true }; };
+#endif
 #endif
 
 
@@ -542,6 +548,26 @@ T div_ceil(const T &a, const T &b)
 {
   return (a+b-1) / b;
 }
+
+// The aim of the following functions is to bypass -Wfloat-equal warnings
+// when we really want a strict equality comparison on floating points.
+template<typename X, typename Y> EIGEN_STRONG_INLINE
+bool equal_strict(const X& x,const Y& y) { return x == y; }
+
+template<> EIGEN_STRONG_INLINE
+bool equal_strict(const float& x,const float& y) { return std::equal_to<float>()(x,y); }
+
+template<> EIGEN_STRONG_INLINE
+bool equal_strict(const double& x,const double& y) { return std::equal_to<double>()(x,y); }
+
+template<typename X, typename Y> EIGEN_STRONG_INLINE
+bool not_equal_strict(const X& x,const Y& y) { return x != y; }
+
+template<> EIGEN_STRONG_INLINE
+bool not_equal_strict(const float& x,const float& y) { return std::not_equal_to<float>()(x,y); }
+
+template<> EIGEN_STRONG_INLINE
+bool not_equal_strict(const double& x,const double& y) { return std::not_equal_to<double>()(x,y); }
 
 } // end namespace numext
 
