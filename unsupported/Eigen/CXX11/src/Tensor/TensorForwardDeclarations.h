@@ -12,7 +12,7 @@
 
 namespace Eigen {
 
-// MakePointer class is used as a container of the adress space of the pointer
+// MakePointer class is used as a container of the address space of the pointer
 // on the host and on the device. From the host side it generates the T* pointer
 // and when EIGEN_USE_SYCL is used it construct a buffer with a map_allocator to
 // T* m_data on the host. It is always called on the device.
@@ -21,6 +21,7 @@ namespace Eigen {
 template<typename T> struct MakePointer {
   typedef T* Type;
   typedef T& RefType;
+  typedef T ScalarType;
 };
 
 namespace internal{
@@ -65,7 +66,7 @@ template<typename Op, typename Dims, typename XprType, template <class> class Ma
 template<typename XprType> class TensorIndexTupleOp;
 template<typename ReduceOp, typename Dims, typename XprType> class TensorTupleReducerOp;
 template<typename Axis, typename LeftXprType, typename RightXprType> class TensorConcatenationOp;
-template<typename Dimensions, typename LeftXprType, typename RightXprType> class TensorContractionOp;
+template<typename Dimensions, typename LeftXprType, typename RightXprType, typename OutputKernelType> class TensorContractionOp;
 template<typename TargetType, typename XprType> class TensorConversionOp;
 template<typename Dimensions, typename InputXprType, typename KernelXprType> class TensorConvolutionOp;
 template<typename FFT, typename XprType, int FFTDataType, int FFTDirection> class TensorFFTOp;
@@ -97,6 +98,8 @@ template<typename XprType> class TensorForcedEvalOp;
 template<typename ExpressionType, typename DeviceType> class TensorDevice;
 template<typename Derived, typename Device> struct TensorEvaluator;
 
+struct NoOpOutputKernel;
+
 struct DefaultDevice;
 struct ThreadPoolDevice;
 struct GpuDevice;
@@ -127,8 +130,14 @@ struct IsVectorizable<GpuDevice, Expression> {
                             TensorEvaluator<Expression, GpuDevice>::IsAligned;
 };
 
+template <typename Device, typename Expression>
+struct IsTileable {
+  static const bool value = TensorEvaluator<Expression, Device>::BlockAccess;
+};
+
 template <typename Expression, typename Device,
-          bool Vectorizable = IsVectorizable<Device, Expression>::value>
+          bool Vectorizable = IsVectorizable<Device, Expression>::value,
+          bool Tileable = IsTileable<Device, Expression>::value>
 class TensorExecutor;
 
 }  // end namespace internal
