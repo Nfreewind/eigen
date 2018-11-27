@@ -102,14 +102,16 @@ struct TensorEvaluator<const TensorAssignOp<LeftArgType, RightArgType>, Device>
   static const int NumDims = XprType::NumDims;
 
   enum {
-    IsAligned    = TensorEvaluator<LeftArgType, Device>::IsAligned &
-                   TensorEvaluator<RightArgType, Device>::IsAligned,
-    PacketAccess = TensorEvaluator<LeftArgType, Device>::PacketAccess &
-                   TensorEvaluator<RightArgType, Device>::PacketAccess,
-    BlockAccess  = TensorEvaluator<LeftArgType, Device>::BlockAccess &
-                   TensorEvaluator<RightArgType, Device>::BlockAccess,
-    Layout       = TensorEvaluator<LeftArgType, Device>::Layout,
-    RawAccess    = TensorEvaluator<LeftArgType, Device>::RawAccess
+    IsAligned         = TensorEvaluator<LeftArgType, Device>::IsAligned &
+                        TensorEvaluator<RightArgType, Device>::IsAligned,
+    PacketAccess      = TensorEvaluator<LeftArgType, Device>::PacketAccess &
+                        TensorEvaluator<RightArgType, Device>::PacketAccess,
+    BlockAccess       = TensorEvaluator<LeftArgType, Device>::BlockAccess &
+                        TensorEvaluator<RightArgType, Device>::BlockAccess,
+    PreferBlockAccess = TensorEvaluator<LeftArgType, Device>::PreferBlockAccess |
+                        TensorEvaluator<RightArgType, Device>::PreferBlockAccess,
+    Layout            = TensorEvaluator<LeftArgType, Device>::Layout,
+    RawAccess         = TensorEvaluator<LeftArgType, Device>::RawAccess
   };
 
   typedef typename internal::TensorBlock<
@@ -187,7 +189,7 @@ struct TensorEvaluator<const TensorAssignOp<LeftArgType, RightArgType>, Device>
 
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE void evalBlock(TensorBlock* block) {
     if (TensorEvaluator<LeftArgType, Device>::RawAccess &&
-        m_leftImpl.data() != nullptr) {
+        m_leftImpl.data() != NULL) {
       TensorBlock left_block(block->first_coeff_index(), block->block_sizes(),
                              block->tensor_strides(), block->tensor_strides(),
                              m_leftImpl.data() + block->first_coeff_index());

@@ -15,7 +15,7 @@ namespace Eigen {
 
 namespace internal {
 
-template<typename _LhsScalar, typename _RhsScalar, bool _ConjLhs=false, bool _ConjRhs=false>
+template<typename _LhsScalar, typename _RhsScalar, bool _ConjLhs=false, bool _ConjRhs=false, int Arch=Architecture::Target>
 class gebp_traits;
 
 
@@ -347,7 +347,7 @@ inline void computeProductBlockingSizes(Index& k, Index& m, Index& n, Index num_
  *  cplx*real : unpack rhs to constant packets, ...
  *  real*cplx : load lhs as (a0,a0,a1,a1), and mul as usual
  */
-template<typename _LhsScalar, typename _RhsScalar, bool _ConjLhs, bool _ConjRhs>
+template<typename _LhsScalar, typename _RhsScalar, bool _ConjLhs, bool _ConjRhs, int Arch>
 class gebp_traits
 {
 public:
@@ -390,6 +390,7 @@ public:
   typedef typename conditional<Vectorizable,_LhsPacket,LhsScalar>::type LhsPacket;
   typedef typename conditional<Vectorizable,_RhsPacket,RhsScalar>::type RhsPacket;
   typedef typename conditional<Vectorizable,_ResPacket,ResScalar>::type ResPacket;
+  typedef LhsPacket LhsPacket4Packing;
 
   typedef ResPacket AccPacket;
   
@@ -460,8 +461,8 @@ public:
 
 };
 
-template<typename RealScalar, bool _ConjLhs>
-class gebp_traits<std::complex<RealScalar>, RealScalar, _ConjLhs, false>
+template<typename RealScalar, bool _ConjLhs, int Arch>
+class gebp_traits<std::complex<RealScalar>, RealScalar, _ConjLhs, false, Arch>
 {
 public:
   typedef std::complex<RealScalar> LhsScalar;
@@ -496,6 +497,7 @@ public:
   typedef typename conditional<Vectorizable,_LhsPacket,LhsScalar>::type LhsPacket;
   typedef typename conditional<Vectorizable,_RhsPacket,RhsScalar>::type RhsPacket;
   typedef typename conditional<Vectorizable,_ResPacket,ResScalar>::type ResPacket;
+  typedef LhsPacket LhsPacket4Packing;
 
   typedef ResPacket AccPacket;
 
@@ -595,8 +597,8 @@ template<typename Packet> struct unpacket_traits<DoublePacket<Packet> > { typede
 //   return res;
 // }
 
-template<typename RealScalar, bool _ConjLhs, bool _ConjRhs>
-class gebp_traits<std::complex<RealScalar>, std::complex<RealScalar>, _ConjLhs, _ConjRhs >
+template<typename RealScalar, bool _ConjLhs, bool _ConjRhs, int Arch>
+class gebp_traits<std::complex<RealScalar>, std::complex<RealScalar>, _ConjLhs, _ConjRhs,Arch>
 {
 public:
   typedef std::complex<RealScalar>  Scalar;
@@ -626,6 +628,7 @@ public:
   typedef typename packet_traits<Scalar>::type     ScalarPacket;
   typedef DoublePacket<RealPacket> DoublePacketType;
 
+  typedef typename conditional<Vectorizable,ScalarPacket,Scalar>::type LhsPacket4Packing;
   typedef typename conditional<Vectorizable,RealPacket,  Scalar>::type LhsPacket;
   typedef typename conditional<Vectorizable,DoublePacketType,Scalar>::type RhsPacket;
   typedef typename conditional<Vectorizable,ScalarPacket,Scalar>::type ResPacket;
@@ -743,8 +746,8 @@ protected:
   conj_helper<LhsScalar,RhsScalar,ConjLhs,ConjRhs> cj;
 };
 
-template<typename RealScalar, bool _ConjRhs>
-class gebp_traits<RealScalar, std::complex<RealScalar>, false, _ConjRhs >
+template<typename RealScalar, bool _ConjRhs, int Arch>
+class gebp_traits<RealScalar, std::complex<RealScalar>, false, _ConjRhs, Arch>
 {
 public:
   typedef std::complex<RealScalar>  Scalar;
@@ -777,6 +780,7 @@ public:
   typedef typename conditional<Vectorizable,_LhsPacket,LhsScalar>::type LhsPacket;
   typedef typename conditional<Vectorizable,_RhsPacket,RhsScalar>::type RhsPacket;
   typedef typename conditional<Vectorizable,_ResPacket,ResScalar>::type ResPacket;
+  typedef LhsPacket LhsPacket4Packing;
 
   typedef ResPacket AccPacket;
 
@@ -848,7 +852,42 @@ protected:
   conj_helper<ResPacket,ResPacket,false,ConjRhs> cj;
 };
 
-/* optimized GEneral packed Block * packed Panel product kernel
+
+#if EIGEN_ARCH_ARM64
+
+template<>
+struct gebp_traits <float, float, false, false,Architecture::NEON>
+ : gebp_traits<float,float,false,false,Architecture::Generic>
+{
+  typedef float32x2_t RhsPacket;
+
+  EIGEN_STRONG_INLINE void broadcastRhs(const RhsScalar* b, RhsPacket& b0, RhsPacket& b1, RhsPacket& b2, RhsPacket& b3)
+  {
+    loadRhs(b+0, b0);
+    loadRhs(b+1, b1);
+    loadRhs(b+2, b2);
+    loadRhs(b+3, b3);
+  }
+
+  EIGEN_STRONG_INLINE void loadRhs(const RhsScalar* b, RhsPacket& dest) const
+  {
+     dest = vld1_f32(b);
+  }
+
+  EIGEN_STRONG_INLINE void loadRhsQuad(const RhsScalar* b, RhsPacket& dest) const
+  {
+    loadRhs(b,dest);
+  }
+
+  EIGEN_STRONG_INLINE void madd(const LhsPacket& a, const RhsPacket& b, AccPacket& c, RhsPacket& /*tmp*/) const
+  {
+    c = vfmaq_lane_f32(c, a, b, 0);
+  }
+};
+
+#endif
+
+/* optimized General packed Block * packed Panel product kernel
  *
  * Mixing type logic: C += A * B
  *  |  A  |  B  | comments
@@ -885,6 +924,86 @@ struct gebp_kernel
   void operator()(const DataMapper& res, const LhsScalar* blockA, const RhsScalar* blockB,
                   Index rows, Index depth, Index cols, ResScalar alpha,
                   Index strideA=-1, Index strideB=-1, Index offsetA=0, Index offsetB=0);
+};
+
+template<typename LhsScalar, typename RhsScalar, typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs,
+  int SwappedLhsProgress = gebp_traits<RhsScalar,LhsScalar,ConjugateRhs,ConjugateLhs>::LhsProgress>
+struct last_row_process_16_packets
+{
+  typedef gebp_traits<LhsScalar,RhsScalar,ConjugateLhs,ConjugateRhs> Traits;
+  typedef gebp_traits<RhsScalar,LhsScalar,ConjugateRhs,ConjugateLhs> SwappedTraits;
+
+  typedef typename Traits::ResScalar ResScalar;
+  typedef typename SwappedTraits::LhsPacket SLhsPacket;
+  typedef typename SwappedTraits::RhsPacket SRhsPacket;
+  typedef typename SwappedTraits::ResPacket SResPacket;
+  typedef typename SwappedTraits::AccPacket SAccPacket;
+
+  EIGEN_STRONG_INLINE void operator()(const DataMapper& res, SwappedTraits &straits, const LhsScalar* blA,
+                  const RhsScalar* blB, Index depth, const Index endk, Index i, Index j2,
+                  ResScalar alpha, SAccPacket &C0)
+    {
+      EIGEN_UNUSED_VARIABLE(res);
+      EIGEN_UNUSED_VARIABLE(straits);
+      EIGEN_UNUSED_VARIABLE(blA);
+      EIGEN_UNUSED_VARIABLE(blB);
+      EIGEN_UNUSED_VARIABLE(depth);
+      EIGEN_UNUSED_VARIABLE(endk);
+      EIGEN_UNUSED_VARIABLE(i);
+      EIGEN_UNUSED_VARIABLE(j2);
+      EIGEN_UNUSED_VARIABLE(alpha);
+      EIGEN_UNUSED_VARIABLE(C0);
+    }
+};
+
+
+template<typename LhsScalar, typename RhsScalar, typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
+struct last_row_process_16_packets<LhsScalar, RhsScalar, Index, DataMapper,  mr,  nr, ConjugateLhs,  ConjugateRhs, 16> {
+  typedef gebp_traits<LhsScalar,RhsScalar,ConjugateLhs,ConjugateRhs> Traits;
+  typedef gebp_traits<RhsScalar,LhsScalar,ConjugateRhs,ConjugateLhs> SwappedTraits;
+
+  typedef typename Traits::ResScalar ResScalar;
+  typedef typename SwappedTraits::LhsPacket SLhsPacket;
+  typedef typename SwappedTraits::RhsPacket SRhsPacket;
+  typedef typename SwappedTraits::ResPacket SResPacket;
+  typedef typename SwappedTraits::AccPacket SAccPacket;
+
+  EIGEN_STRONG_INLINE void operator()(const DataMapper& res, SwappedTraits &straits, const LhsScalar* blA,
+                  const RhsScalar* blB, Index depth, const Index endk, Index i, Index j2,
+                  ResScalar alpha, SAccPacket &C0)
+  {
+    typedef typename unpacket_traits<typename unpacket_traits<SResPacket>::half>::half SResPacketQuarter;
+    typedef typename unpacket_traits<typename unpacket_traits<SLhsPacket>::half>::half SLhsPacketQuarter;
+    typedef typename unpacket_traits<typename unpacket_traits<SRhsPacket>::half>::half SRhsPacketQuarter;
+    typedef typename unpacket_traits<typename unpacket_traits<SAccPacket>::half>::half SAccPacketQuarter;
+
+    SResPacketQuarter R = res.template gatherPacket<SResPacketQuarter>(i, j2);
+    SResPacketQuarter alphav = pset1<SResPacketQuarter>(alpha);
+
+    if (depth - endk > 0)
+      {
+	// We have to handle the last row(s) of the rhs, which
+	// correspond to a half-packet
+	SAccPacketQuarter c0 = predux_half_dowto4(predux_half_dowto4(C0));
+
+	for (Index kk = endk; kk < depth; kk++)
+	  {
+	    SLhsPacketQuarter a0;
+	    SRhsPacketQuarter b0;
+	    straits.loadLhsUnaligned(blB, a0);
+	    straits.loadRhs(blA, b0);
+	    straits.madd(a0,b0,c0,b0);
+	    blB += SwappedTraits::LhsProgress/4;
+	    blA += 1;
+	  }
+	straits.acc(c0, alphav, R);
+      }
+    else
+      {
+	straits.acc(predux_half_dowto4(predux_half_dowto4(C0)), alphav, R);
+      }
+    res.scatterPacket(i, j2, R);
+  }
 };
 
 template<typename LhsScalar, typename RhsScalar, typename Index, typename DataMapper, int mr, int nr, bool ConjugateLhs, bool ConjugateRhs>
@@ -1025,9 +1144,9 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           ResPacket R0, R1, R2;
           ResPacket alphav = pset1<ResPacket>(alpha);
 
-          R0 = r0.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r0.loadPacket(1 * Traits::ResPacketSize);
-          R2 = r0.loadPacket(2 * Traits::ResPacketSize);
+          R0 = r0.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r0.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
+          R2 = r0.template loadPacket<ResPacket>(2 * Traits::ResPacketSize);
           traits.acc(C0, alphav, R0);
           traits.acc(C4, alphav, R1);
           traits.acc(C8, alphav, R2);
@@ -1035,9 +1154,9 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           r0.storePacket(1 * Traits::ResPacketSize, R1);
           r0.storePacket(2 * Traits::ResPacketSize, R2);
 
-          R0 = r1.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r1.loadPacket(1 * Traits::ResPacketSize);
-          R2 = r1.loadPacket(2 * Traits::ResPacketSize);
+          R0 = r1.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r1.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
+          R2 = r1.template loadPacket<ResPacket>(2 * Traits::ResPacketSize);
           traits.acc(C1, alphav, R0);
           traits.acc(C5, alphav, R1);
           traits.acc(C9, alphav, R2);
@@ -1045,9 +1164,9 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           r1.storePacket(1 * Traits::ResPacketSize, R1);
           r1.storePacket(2 * Traits::ResPacketSize, R2);
 
-          R0 = r2.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r2.loadPacket(1 * Traits::ResPacketSize);
-          R2 = r2.loadPacket(2 * Traits::ResPacketSize);
+          R0 = r2.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r2.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
+          R2 = r2.template loadPacket<ResPacket>(2 * Traits::ResPacketSize);
           traits.acc(C2, alphav, R0);
           traits.acc(C6, alphav, R1);
           traits.acc(C10, alphav, R2);
@@ -1055,9 +1174,9 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           r2.storePacket(1 * Traits::ResPacketSize, R1);
           r2.storePacket(2 * Traits::ResPacketSize, R2);
 
-          R0 = r3.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r3.loadPacket(1 * Traits::ResPacketSize);
-          R2 = r3.loadPacket(2 * Traits::ResPacketSize);
+          R0 = r3.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r3.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
+          R2 = r3.template loadPacket<ResPacket>(2 * Traits::ResPacketSize);
           traits.acc(C3, alphav, R0);
           traits.acc(C7, alphav, R1);
           traits.acc(C11, alphav, R2);
@@ -1134,9 +1253,9 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           ResPacket R0, R1, R2;
           ResPacket alphav = pset1<ResPacket>(alpha);
 
-          R0 = r0.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r0.loadPacket(1 * Traits::ResPacketSize);
-          R2 = r0.loadPacket(2 * Traits::ResPacketSize);
+          R0 = r0.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r0.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
+          R2 = r0.template loadPacket<ResPacket>(2 * Traits::ResPacketSize);
           traits.acc(C0, alphav, R0);
           traits.acc(C4, alphav, R1);
           traits.acc(C8, alphav, R2);
@@ -1244,10 +1363,10 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           ResPacket R0, R1, R2, R3;
           ResPacket alphav = pset1<ResPacket>(alpha);
 
-          R0 = r0.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r0.loadPacket(1 * Traits::ResPacketSize);
-          R2 = r1.loadPacket(0 * Traits::ResPacketSize);
-          R3 = r1.loadPacket(1 * Traits::ResPacketSize);
+          R0 = r0.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r0.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
+          R2 = r1.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R3 = r1.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
           traits.acc(C0, alphav, R0);
           traits.acc(C4, alphav, R1);
           traits.acc(C1, alphav, R2);
@@ -1257,10 +1376,10 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           r1.storePacket(0 * Traits::ResPacketSize, R2);
           r1.storePacket(1 * Traits::ResPacketSize, R3);
 
-          R0 = r2.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r2.loadPacket(1 * Traits::ResPacketSize);
-          R2 = r3.loadPacket(0 * Traits::ResPacketSize);
-          R3 = r3.loadPacket(1 * Traits::ResPacketSize);
+          R0 = r2.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r2.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
+          R2 = r3.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R3 = r3.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
           traits.acc(C2,  alphav, R0);
           traits.acc(C6,  alphav, R1);
           traits.acc(C3,  alphav, R2);
@@ -1337,8 +1456,8 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           ResPacket R0, R1;
           ResPacket alphav = pset1<ResPacket>(alpha);
 
-          R0 = r0.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r0.loadPacket(1 * Traits::ResPacketSize);
+          R0 = r0.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r0.template loadPacket<ResPacket>(1 * Traits::ResPacketSize);
           traits.acc(C0, alphav, R0);
           traits.acc(C4, alphav, R1);
           r0.storePacket(0 * Traits::ResPacketSize, R0);
@@ -1431,15 +1550,15 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           ResPacket R0, R1;
           ResPacket alphav = pset1<ResPacket>(alpha);
 
-          R0 = r0.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r1.loadPacket(0 * Traits::ResPacketSize);
+          R0 = r0.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r1.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
           traits.acc(C0, alphav, R0);
           traits.acc(C1,  alphav, R1);
           r0.storePacket(0 * Traits::ResPacketSize, R0);
           r1.storePacket(0 * Traits::ResPacketSize, R1);
 
-          R0 = r2.loadPacket(0 * Traits::ResPacketSize);
-          R1 = r3.loadPacket(0 * Traits::ResPacketSize);
+          R0 = r2.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
+          R1 = r3.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
           traits.acc(C2,  alphav, R0);
           traits.acc(C3,  alphav, R1);
           r2.storePacket(0 * Traits::ResPacketSize, R0);
@@ -1504,7 +1623,7 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
 #undef EIGEN_GEBGP_ONESTEP
           ResPacket R0;
           ResPacket alphav = pset1<ResPacket>(alpha);
-          R0 = r0.loadPacket(0 * Traits::ResPacketSize);
+          R0 = r0.template loadPacket<ResPacket>(0 * Traits::ResPacketSize);
           traits.acc(C0, alphav, R0);
           r0.storePacket(0 * Traits::ResPacketSize, R0);
         }
@@ -1523,13 +1642,15 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
           prefetch(&blA[0]);
           const RhsScalar* blB = &blockB[j2*strideB+offsetB*nr];
 
-          // The following piece of code won't work for 512 bit registers
-          // Moreover, if LhsProgress==8 it assumes that there is a half packet of the same size
-          // as nr (which is currently 4) for the return type.
+          // If LhsProgress is 8 or 16, it assumes that there is a
+          // half or quarter packet, respectively, of the same size as
+          // nr (which is currently 4) for the return type.
           const int SResPacketHalfSize = unpacket_traits<typename unpacket_traits<SResPacket>::half>::size;
+          const int SResPacketQuarterSize = unpacket_traits<typename unpacket_traits<typename unpacket_traits<SResPacket>::half>::half>::size;
           if ((SwappedTraits::LhsProgress % 4) == 0 &&
-              (SwappedTraits::LhsProgress <= 8) &&
-              (SwappedTraits::LhsProgress!=8 || SResPacketHalfSize==nr))
+              (SwappedTraits::LhsProgress<=16) &&
+              (SwappedTraits::LhsProgress!=8 || SResPacketHalfSize==nr) &&
+              (SwappedTraits::LhsProgress!=16 || SResPacketQuarterSize==nr))
           {
             SAccPacket C0, C1, C2, C3;
             straits.initAcc(C0);
@@ -1605,6 +1726,15 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
                 straits.acc(predux_half_dowto4(C0), alphav, R);
               }
               res.scatterPacket(i, j2, R);
+            }
+            else if (SwappedTraits::LhsProgress==16)
+            {
+              // Special case where we have to first reduce the
+              // accumulation register C0. We specialize the block in
+              // template form, so that LhsProgress < 16 paths don't
+              // fail to compile
+              last_row_process_16_packets<LhsScalar, RhsScalar, Index, DataMapper, mr, nr, ConjugateLhs, ConjugateRhs> p;
+	      p(res, straits, blA, blB, depth, endk, i, j2,alpha, C0);
             }
             else
             {
@@ -1685,19 +1815,18 @@ void gebp_kernel<LhsScalar,RhsScalar,Index,DataMapper,mr,nr,ConjugateLhs,Conjuga
 //
 //  32 33 34 35 ...
 //  36 36 38 39 ...
-template<typename Scalar, typename Index, typename DataMapper, int Pack1, int Pack2, bool Conjugate, bool PanelMode>
-struct gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, ColMajor, Conjugate, PanelMode>
+template<typename Scalar, typename Index, typename DataMapper, int Pack1, int Pack2, typename Packet, bool Conjugate, bool PanelMode>
+struct gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Packet, ColMajor, Conjugate, PanelMode>
 {
   typedef typename DataMapper::LinearMapper LinearMapper;
   EIGEN_DONT_INLINE void operator()(Scalar* blockA, const DataMapper& lhs, Index depth, Index rows, Index stride=0, Index offset=0);
 };
 
-template<typename Scalar, typename Index, typename DataMapper, int Pack1, int Pack2, bool Conjugate, bool PanelMode>
-EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, ColMajor, Conjugate, PanelMode>
+template<typename Scalar, typename Index, typename DataMapper, int Pack1, int Pack2, typename Packet, bool Conjugate, bool PanelMode>
+EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Packet, ColMajor, Conjugate, PanelMode>
   ::operator()(Scalar* blockA, const DataMapper& lhs, Index depth, Index rows, Index stride, Index offset)
 {
-  typedef typename packet_traits<Scalar>::type Packet;
-  enum { PacketSize = packet_traits<Scalar>::size };
+  enum { PacketSize = unpacket_traits<Packet>::size };
 
   EIGEN_ASM_COMMENT("EIGEN PRODUCT PACK LHS");
   EIGEN_UNUSED_VARIABLE(stride);
@@ -1725,9 +1854,9 @@ EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Co
       for(Index k=0; k<depth; k++)
       {
         Packet A, B, C;
-        A = lhs.loadPacket(i+0*PacketSize, k);
-        B = lhs.loadPacket(i+1*PacketSize, k);
-        C = lhs.loadPacket(i+2*PacketSize, k);
+        A = lhs.template loadPacket<Packet>(i+0*PacketSize, k);
+        B = lhs.template loadPacket<Packet>(i+1*PacketSize, k);
+        C = lhs.template loadPacket<Packet>(i+2*PacketSize, k);
         pstore(blockA+count, cj.pconj(A)); count+=PacketSize;
         pstore(blockA+count, cj.pconj(B)); count+=PacketSize;
         pstore(blockA+count, cj.pconj(C)); count+=PacketSize;
@@ -1745,8 +1874,8 @@ EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Co
       for(Index k=0; k<depth; k++)
       {
         Packet A, B;
-        A = lhs.loadPacket(i+0*PacketSize, k);
-        B = lhs.loadPacket(i+1*PacketSize, k);
+        A = lhs.template loadPacket<Packet>(i+0*PacketSize, k);
+        B = lhs.template loadPacket<Packet>(i+1*PacketSize, k);
         pstore(blockA+count, cj.pconj(A)); count+=PacketSize;
         pstore(blockA+count, cj.pconj(B)); count+=PacketSize;
       }
@@ -1763,7 +1892,7 @@ EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Co
       for(Index k=0; k<depth; k++)
       {
         Packet A;
-        A = lhs.loadPacket(i+0*PacketSize, k);
+        A = lhs.template loadPacket<Packet>(i+0*PacketSize, k);
         pstore(blockA+count, cj.pconj(A));
         count+=PacketSize;
       }
@@ -1793,19 +1922,18 @@ EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Co
   }
 }
 
-template<typename Scalar, typename Index, typename DataMapper, int Pack1, int Pack2, bool Conjugate, bool PanelMode>
-struct gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, RowMajor, Conjugate, PanelMode>
+template<typename Scalar, typename Index, typename DataMapper, int Pack1, int Pack2, typename Packet, bool Conjugate, bool PanelMode>
+struct gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Packet, RowMajor, Conjugate, PanelMode>
 {
   typedef typename DataMapper::LinearMapper LinearMapper;
   EIGEN_DONT_INLINE void operator()(Scalar* blockA, const DataMapper& lhs, Index depth, Index rows, Index stride=0, Index offset=0);
 };
 
-template<typename Scalar, typename Index, typename DataMapper, int Pack1, int Pack2, bool Conjugate, bool PanelMode>
-EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, RowMajor, Conjugate, PanelMode>
+template<typename Scalar, typename Index, typename DataMapper, int Pack1, int Pack2, typename Packet, bool Conjugate, bool PanelMode>
+EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Packet, RowMajor, Conjugate, PanelMode>
   ::operator()(Scalar* blockA, const DataMapper& lhs, Index depth, Index rows, Index stride, Index offset)
 {
-  typedef typename packet_traits<Scalar>::type Packet;
-  enum { PacketSize = packet_traits<Scalar>::size };
+  enum { PacketSize = unpacket_traits<Packet>::size };
 
   EIGEN_ASM_COMMENT("EIGEN PRODUCT PACK LHS");
   EIGEN_UNUSED_VARIABLE(stride);
@@ -1837,7 +1965,7 @@ EIGEN_DONT_INLINE void gemm_pack_lhs<Scalar, Index, DataMapper, Pack1, Pack2, Ro
           for (Index m = 0; m < pack; m += PacketSize)
           {
             PacketBlock<Packet> kernel;
-            for (int p = 0; p < PacketSize; ++p) kernel.packet[p] = lhs.loadPacket(i+p+m, k);
+            for (int p = 0; p < PacketSize; ++p) kernel.packet[p] = lhs.template loadPacket<Packet>(i+p+m, k);
             ptranspose(kernel);
             for (int p = 0; p < PacketSize; ++p) pstore(blockA+count+m+(pack)*p, cj.pconj(kernel.packet[p]));
           }
@@ -1971,10 +2099,10 @@ EIGEN_DONT_INLINE void gemm_pack_rhs<Scalar, Index, DataMapper, nr, ColMajor, Co
       {
         for(; k<peeled_k; k+=PacketSize) {
           PacketBlock<Packet,(PacketSize%4)==0?4:PacketSize> kernel;
-          kernel.packet[0] = dm0.loadPacket(k);
-          kernel.packet[1%PacketSize] = dm1.loadPacket(k);
-          kernel.packet[2%PacketSize] = dm2.loadPacket(k);
-          kernel.packet[3%PacketSize] = dm3.loadPacket(k);
+          kernel.packet[0           ] = dm0.template loadPacket<Packet>(k);
+          kernel.packet[1%PacketSize] = dm1.template loadPacket<Packet>(k);
+          kernel.packet[2%PacketSize] = dm2.template loadPacket<Packet>(k);
+          kernel.packet[3%PacketSize] = dm3.template loadPacket<Packet>(k);
           ptranspose(kernel);
           pstoreu(blockB+count+0*PacketSize, cj.pconj(kernel.packet[0]));
           pstoreu(blockB+count+1*PacketSize, cj.pconj(kernel.packet[1%PacketSize]));
@@ -2075,7 +2203,7 @@ EIGEN_DONT_INLINE void gemm_pack_rhs<Scalar, Index, DataMapper, nr, RowMajor, Co
       for(Index k=0; k<depth; k++)
       {
         if (PacketSize==4) {
-          Packet A = rhs.loadPacket(k, j2);
+          Packet A = rhs.template loadPacket<Packet>(k, j2);
           pstoreu(blockB+count, cj.pconj(A));
           count += PacketSize;
         } else {

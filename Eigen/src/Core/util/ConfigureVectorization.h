@@ -39,15 +39,19 @@
  */
 #if (defined EIGEN_CUDACC)
   #define EIGEN_ALIGN_TO_BOUNDARY(n) __align__(n)
+  #define EIGEN_ALIGNOF(x) __alignof(x)
 #elif EIGEN_COMP_GNUC || EIGEN_COMP_PGI || EIGEN_COMP_IBM || EIGEN_COMP_ARM
   #define EIGEN_ALIGN_TO_BOUNDARY(n) __attribute__((aligned(n)))
+  #define EIGEN_ALIGNOF(x) __alignof(x)
 #elif EIGEN_COMP_MSVC
   #define EIGEN_ALIGN_TO_BOUNDARY(n) __declspec(align(n))
+  #define EIGEN_ALIGNOF(x) __alignof(x)
 #elif EIGEN_COMP_SUNCC
   // FIXME not sure about this one:
   #define EIGEN_ALIGN_TO_BOUNDARY(n) __attribute__((aligned(n)))
+  #define EIGEN_ALIGNOF(x) __alignof(x)
 #else
-  #error Please tell me what is the equivalent of __attribute__((aligned(n))) for your compiler
+  #error Please tell me what is the equivalent of __attribute__((aligned(n))) and __alignof(x) for your compiler
 #endif
 
 // If the user explicitly disable vectorization, then we also disable alignment
@@ -123,7 +127,7 @@
 
 #endif
 
-// If EIGEN_MAX_ALIGN_BYTES is defined, then it is considered as an upper bound for EIGEN_MAX_ALIGN_BYTES
+// If EIGEN_MAX_ALIGN_BYTES is defined, then it is considered as an upper bound for EIGEN_MAX_STATIC_ALIGN_BYTES
 #if defined(EIGEN_MAX_ALIGN_BYTES) && EIGEN_MAX_ALIGN_BYTES<EIGEN_MAX_STATIC_ALIGN_BYTES
 #undef EIGEN_MAX_STATIC_ALIGN_BYTES
 #define EIGEN_MAX_STATIC_ALIGN_BYTES EIGEN_MAX_ALIGN_BYTES
@@ -375,10 +379,12 @@
   #include <cuda_fp16.h>
 #endif
 
-#if defined(EIGEN_HIP_DEVICE_COMPILE)
-
+#if defined(EIGEN_HIPCC)
   #define EIGEN_VECTORIZE_GPU
   #include <hip/hip_vector_types.h>
+#endif
+
+#if defined(EIGEN_HIP_DEVICE_COMPILE)
 
   #define EIGEN_HAS_HIP_FP16
   #include <hip/hip_fp16.h>
