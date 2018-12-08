@@ -10,13 +10,6 @@
 #ifndef EIGEN_CONFIGURE_VECTORIZATION_H
 #define EIGEN_CONFIGURE_VECTORIZATION_H
 
-// FIXME: not sure why this is needed, perhaps it is not needed anymore.
-#ifdef __NVCC__
-  #ifndef EIGEN_DONT_VECTORIZE
-  #define EIGEN_DONT_VECTORIZE
-  #endif
-#endif
-
 //------------------------------------------------------------------------------------------
 // Static and dynamic alignment control
 //
@@ -56,7 +49,13 @@
 
 // If the user explicitly disable vectorization, then we also disable alignment
 #if defined(EIGEN_DONT_VECTORIZE)
-  #define EIGEN_IDEAL_MAX_ALIGN_BYTES 0
+  #if defined(EIGEN_GPUCC)
+    // GPU code is always vectorized and requires memory alignment for
+    // statically allocated buffers.
+    #define EIGEN_IDEAL_MAX_ALIGN_BYTES 16
+  #else
+    #define EIGEN_IDEAL_MAX_ALIGN_BYTES 0
+  #endif
 #elif defined(__AVX512F__)
   // 64 bytes static alignment is preferred only if really required
   #define EIGEN_IDEAL_MAX_ALIGN_BYTES 64
@@ -183,8 +182,6 @@
 
 //----------------------------------------------------------------------
 
-
-
 // if alignment is disabled, then disable vectorization. Note: EIGEN_MAX_ALIGN_BYTES is the proper check, it takes into
 // account both the user's will (EIGEN_MAX_ALIGN_BYTES,EIGEN_DONT_ALIGN) and our own platform checks
 #if EIGEN_MAX_ALIGN_BYTES==0
@@ -211,7 +208,7 @@
 #endif
 
 
-#ifndef EIGEN_DONT_VECTORIZE
+#if !(defined(EIGEN_DONT_VECTORIZE) || defined(EIGEN_GPUCC))
 
   #if defined (EIGEN_SSE2_ON_NON_MSVC_BUT_NOT_OLD_GCC) || defined(EIGEN_SSE2_ON_MSVC_2008_OR_LATER)
 
@@ -253,10 +250,19 @@
       #define EIGEN_VECTORIZE_SSE4_1
       #define EIGEN_VECTORIZE_SSE4_2
     #endif
-    #ifdef __FMA__
+    #if defined(__FMA__) || (EIGEN_COMP_MSVC && defined(__AVX2__))
+      // MSVC does not expose a switch dedicated for FMA
+      // For MSVC, AVX2 => FMA
       #define EIGEN_VECTORIZE_FMA
     #endif
     #if defined(__AVX512F__)
+      #ifndef __FMA__
+      #if EIGEN_COMP_GNUC
+      #error Please add -mfma to your compiler flags: compiling with -mavx512f alone without SSE/AVX FMA is not supported (bug 1638).
+      #else
+      #error Please enable FMA in your compiler flags (e.g. -mfma): compiling with AVX512 alone without SSE/AVX FMA is not supported (bug 1638).
+      #endif
+      #endif
       #define EIGEN_VECTORIZE_AVX512
       #define EIGEN_VECTORIZE_AVX2
       #define EIGEN_VECTORIZE_AVX

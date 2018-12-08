@@ -27,7 +27,44 @@ bool g_first_pass = true;
 
 namespace Eigen {
 namespace internal {
+
 template<typename T> T negate(const T& x) { return -x; }
+
+template<typename T>
+Map<const Array<unsigned char,sizeof(T),1> >
+bits(const T& x) {
+  return Map<const Array<unsigned char,sizeof(T),1> >(reinterpret_cast<const unsigned char *>(&x));
+}
+
+// The following implement bitwise operations on floating point types
+template<typename T,typename Bits,typename Func>
+T apply_bit_op(Bits a, Bits b, Func f) {
+  Array<unsigned char,sizeof(T),1> res;
+  for(Index i=0; i<res.size();++i) res[i] = f(a[i],b[i]);
+  return *reinterpret_cast<T*>(&res);
+}
+
+#define EIGEN_TEST_MAKE_BITWISE2(OP,FUNC,T)             \
+  template<> T EIGEN_CAT(p,OP)(const T& a,const T& b) { \
+    return apply_bit_op<T>(bits(a),bits(b),FUNC);     \
+  }
+
+#define EIGEN_TEST_MAKE_BITWISE(OP,FUNC)                  \
+  EIGEN_TEST_MAKE_BITWISE2(OP,FUNC,float)                 \
+  EIGEN_TEST_MAKE_BITWISE2(OP,FUNC,double)                \
+  EIGEN_TEST_MAKE_BITWISE2(OP,FUNC,half)                  \
+  EIGEN_TEST_MAKE_BITWISE2(OP,FUNC,std::complex<float>)   \
+  EIGEN_TEST_MAKE_BITWISE2(OP,FUNC,std::complex<double>)
+
+EIGEN_TEST_MAKE_BITWISE(xor,std::bit_xor<unsigned char>())
+EIGEN_TEST_MAKE_BITWISE(and,std::bit_and<unsigned char>())
+EIGEN_TEST_MAKE_BITWISE(or, std::bit_or<unsigned char>())
+struct bit_andnot{
+  template<typename T> T
+  operator()(T a, T b) const { return a & (~b); }
+};
+EIGEN_TEST_MAKE_BITWISE(andnot, bit_andnot())
+
 }
 }
 
@@ -277,15 +314,18 @@ template<typename Scalar,typename Packet> void packetmath()
     ref[0] *= data1[i];
   VERIFY(internal::isApprox(ref[0], internal::predux_mul(internal::pload<Packet>(data1))) && "internal::predux_mul");
 
-  for (int j=0; j<PacketSize; ++j)
+  if (PacketTraits::HasReduxp)
   {
-    ref[j] = Scalar(0);
-    for (int i=0; i<PacketSize; ++i)
-      ref[j] += data1[i+j*PacketSize];
-    packets[j] = internal::pload<Packet>(data1+j*PacketSize);
+    for (int j=0; j<PacketSize; ++j)
+    {
+      ref[j] = Scalar(0);
+      for (int i=0; i<PacketSize; ++i)
+        ref[j] += data1[i+j*PacketSize];
+      packets[j] = internal::pload<Packet>(data1+j*PacketSize);
+    }
+    internal::pstore(data2, internal::preduxp(packets));
+    VERIFY(areApproxAbs(ref, data2, PacketSize, refvalue) && "internal::preduxp");
   }
-  internal::pstore(data2, internal::preduxp(packets));
-  VERIFY(areApproxAbs(ref, data2, PacketSize, refvalue) && "internal::preduxp");
 
   for (int i=0; i<PacketSize; ++i)
     ref[i] = data1[PacketSize-i-1];
@@ -303,6 +343,11 @@ template<typename Scalar,typename Packet> void packetmath()
       VERIFY(isApproxAbs(data2[j], data1[i+j*PacketSize], refvalue) && "ptranspose");
     }
   }
+
+  CHECK_CWISE2_IF(true, internal::por, internal::por);
+  CHECK_CWISE2_IF(true, internal::pxor, internal::pxor);
+  CHECK_CWISE2_IF(true, internal::pand, internal::pand);
+  CHECK_CWISE2_IF(true, internal::pandnot, internal::pandnot);
 
   if (PacketTraits::HasBlend) {
     Packet thenPacket = internal::pload<Packet>(data1);
