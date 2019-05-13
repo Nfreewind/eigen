@@ -184,7 +184,10 @@ template<typename T> struct unpacket_traits
   enum
   {
     size = 1,
-    alignment = 1
+    alignment = 1,
+    vectorizable = false,
+    masked_load_available=false,
+    masked_store_available=false
   };
 };
 
