@@ -63,14 +63,20 @@ typedef std::size_t UIntPtr;
 struct true_type {  enum { value = 1 }; };
 struct false_type { enum { value = 0 }; };
 
+template<bool Condition>
+struct bool_constant;
+
+template<>
+struct bool_constant<true> : true_type {};
+
+template<>
+struct bool_constant<false> : false_type {};
+
 template<bool Condition, typename Then, typename Else>
 struct conditional { typedef Then type; };
 
 template<typename Then, typename Else>
 struct conditional <false, Then, Else> { typedef Else type; };
-
-template<typename T, typename U> struct is_same { enum { value = 0 }; };
-template<typename T> struct is_same<T,T> { enum { value = 1 }; };
 
 template<typename T> struct remove_reference { typedef T type; };
 template<typename T> struct remove_reference<T&> { typedef T type; };
@@ -105,6 +111,12 @@ template<> struct is_arithmetic<signed int>    { enum { value = true }; };
 template<> struct is_arithmetic<unsigned int>  { enum { value = true }; };
 template<> struct is_arithmetic<signed long>   { enum { value = true }; };
 template<> struct is_arithmetic<unsigned long> { enum { value = true }; };
+
+template<typename T, typename U> struct is_same { enum { value = 0 }; };
+template<typename T> struct is_same<T,T> { enum { value = 1 }; };
+
+template< class T >
+struct is_void : is_same<void, typename remove_const<T>::type> {};
 
 #if EIGEN_HAS_CXX11
 template<> struct is_arithmetic<signed long long>   { enum { value = true }; };
@@ -162,6 +174,11 @@ template<typename T> struct add_const_on_value_type<T*>        { typedef T const
 template<typename T> struct add_const_on_value_type<T* const>  { typedef T const* const type; };
 template<typename T> struct add_const_on_value_type<T const* const>  { typedef T const* const type; };
 
+#if EIGEN_HAS_CXX11
+
+using std::is_convertible;
+
+#else
 
 template<typename From, typename To>
 struct is_convertible_impl
@@ -198,6 +215,14 @@ struct is_convertible
 {
   enum { value = is_convertible_impl<From,To>::value };
 };
+
+template<typename T>
+struct is_convertible<T,T&> { enum { value = false }; };
+
+template<typename T>
+struct is_convertible<const T,const T&> { enum { value = true }; };
+
+#endif
 
 /** \internal Allows to enable/disable an overload
   * according to a compile time condition.

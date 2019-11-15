@@ -300,7 +300,7 @@ struct abs2_impl_default<Scalar, true> // IsComplex
   EIGEN_DEVICE_FUNC
   static inline RealScalar run(const Scalar& x)
   {
-    return real(x)*real(x) + imag(x)*imag(x);
+    return x.real()*x.real() + x.imag()*x.imag();
   }
 };
 
@@ -326,14 +326,17 @@ struct abs2_retval
 ****************************************************************************/
 
 template<typename Scalar, bool IsComplex>
-struct norm1_default_impl
+struct norm1_default_impl;
+
+template<typename Scalar>
+struct norm1_default_impl<Scalar,true>
 {
   typedef typename NumTraits<Scalar>::Real RealScalar;
   EIGEN_DEVICE_FUNC
   static inline RealScalar run(const Scalar& x)
   {
     EIGEN_USING_STD_MATH(abs);
-    return abs(real(x)) + abs(imag(x));
+    return abs(x.real()) + abs(x.imag());
   }
 };
 
@@ -501,7 +504,8 @@ namespace std_fallback {
     }
 
     EIGEN_USING_STD_MATH(log);
-    return (u - RealScalar(1)) * x / log(u);
+    Scalar logu = log(u);
+    return numext::equal_strict(u, logu) ? u : (u - RealScalar(1)) * x / logu;
   }
 }
 
@@ -512,12 +516,22 @@ struct expm1_impl {
     EIGEN_STATIC_ASSERT_NON_INTEGER(Scalar)
     #if EIGEN_HAS_CXX11_MATH
     using std::expm1;
-    #endif
+    #else
     using std_fallback::expm1;
+    #endif
     return expm1(x);
   }
 };
 
+// Specialization for complex types that are not supported by std::expm1.
+template <typename RealScalar>
+struct expm1_impl<std::complex<RealScalar> > {
+  EIGEN_DEVICE_FUNC static inline std::complex<RealScalar> run(
+      const std::complex<RealScalar>& x) {
+    EIGEN_STATIC_ASSERT_NON_INTEGER(RealScalar)
+    return std_fallback::expm1(x);
+  }
+};
 
 template<typename Scalar>
 struct expm1_retval
@@ -538,7 +552,10 @@ namespace std_fallback {
     typedef typename NumTraits<Scalar>::Real RealScalar;
     EIGEN_USING_STD_MATH(log);
     Scalar x1p = RealScalar(1) + x;
-    return numext::equal_strict(x1p, Scalar(1)) ? x : x * ( log(x1p) / (x1p - RealScalar(1)) );
+    Scalar log_1p = log(x1p);
+    const bool is_small = numext::equal_strict(x1p, Scalar(1));
+    const bool is_inf = numext::equal_strict(x1p, log_1p);
+    return (is_small || is_inf) ? x : x * (log_1p / (x1p - RealScalar(1)));
   }
 }
 
@@ -549,12 +566,22 @@ struct log1p_impl {
     EIGEN_STATIC_ASSERT_NON_INTEGER(Scalar)
     #if EIGEN_HAS_CXX11_MATH
     using std::log1p;
-    #endif
+    #else
     using std_fallback::log1p;
+    #endif
     return log1p(x);
   }
 };
 
+// Specialization for complex types that are not supported by std::log1p.
+template <typename RealScalar>
+struct log1p_impl<std::complex<RealScalar> > {
+  EIGEN_DEVICE_FUNC static inline std::complex<RealScalar> run(
+      const std::complex<RealScalar>& x) {
+    EIGEN_STATIC_ASSERT_NON_INTEGER(RealScalar)
+    return std_fallback::log1p(x);
+  }
+};
 
 template<typename Scalar>
 struct log1p_retval
@@ -729,8 +756,8 @@ struct random_default_impl<Scalar, true, false>
 {
   static inline Scalar run(const Scalar& x, const Scalar& y)
   {
-    return Scalar(random(real(x), real(y)),
-                  random(imag(x), imag(y)));
+    return Scalar(random(x.real(), y.real()),
+                  random(x.imag(), y.imag()));
   }
   static inline Scalar run()
   {
@@ -867,7 +894,6 @@ template<typename T> EIGEN_DEVICE_FUNC bool isnan_impl(const std::complex<T>& x)
 template<typename T> EIGEN_DEVICE_FUNC bool isinf_impl(const std::complex<T>& x);
 
 template<typename T> T generic_fast_tanh_float(const T& a_x);
-
 } // end namespace internal
 
 /****************************************************************************
